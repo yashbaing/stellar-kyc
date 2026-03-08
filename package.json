@@ -1,0 +1,42 @@
+{
+  "name": "stellar-kyc",
+  "version": "1.0.0",
+  "description": "Stellar KYC — Reusable Identity Infrastructure for the Stellar Ecosystem",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "frontend",
+    "sdk"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev --workspace=backend\" \"npm run dev --workspace=frontend\"",
+    "build": "npm run build --workspace=backend && npm run build --workspace=frontend && npm run build --workspace=sdk",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "docker:logs": "docker-compose logs -f",
+    "db:migrate": "psql -U postgres -d stellar_kyc -f backend/src/db/schema.sql",
+    "clean": "rm -rf backend/dist frontend/dist sdk/dist node_modules backend/node_modules frontend/node_modules sdk/node_modules"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/stellar-kyc/stellar-kyc.git"
+  },
+  "keywords": [
+    "stellar",
+    "kyc",
+    "identity",
+    "blockchain",
+    "sep-12",
+    "verifiable-credentials",
+    "web3"
+  ],
+  "license": "MIT",
+  "author": "Stellar KYC Contributors"
+}
