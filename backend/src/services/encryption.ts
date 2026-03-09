@@ -1,6 +1,18 @@
 import nacl from 'tweetnacl';
-import { encodeBase64, decodeBase64, encodeUTF8, decodeUTF8 } from 'tweetnacl-util';
 import { createHash } from 'crypto';
+
+/** Decode bytes to UTF-8 string (tweetnacl-util types are loose) */
+function bytesToUtf8(bytes: Uint8Array): string {
+  return new TextDecoder().decode(bytes);
+}
+/** Encode string to bytes as Uint8Array */
+function utf8ToBytes(s: string): Uint8Array {
+  return new Uint8Array(Buffer.from(s, 'utf8'));
+}
+/** Decode base64 to Uint8Array */
+function b64ToBytes(s: string): Uint8Array {
+  return new Uint8Array(Buffer.from(s, 'base64'));
+}
 import { EncryptedPackage, W3CVerifiableCredential } from '../types';
 import { logger } from './logger';
 
@@ -14,12 +26,12 @@ export async function encryptCredential(
 ): Promise<EncryptedPackage> {
   const serverKeypair = nacl.box.keyPair();
   const credentialJson = JSON.stringify(credentialData);
-  const credentialBytes = encodeUTF8(credentialJson);
+  const credentialBytes = utf8ToBytes(credentialJson);
   const nonce = nacl.randomBytes(nacl.box.nonceLength);
 
   let userPublicKey: Uint8Array;
   try {
-    userPublicKey = decodeBase64(userPublicKeyBase64);
+    userPublicKey = b64ToBytes(userPublicKeyBase64);
   } catch {
     throw new Error('Invalid user public key format');
   }
@@ -43,10 +55,10 @@ export async function encryptCredential(
   });
 
   return {
-    nonce: encodeBase64(nonce),
-    ciphertext: encodeBase64(encrypted),
+    nonce: Buffer.from(nonce).toString('base64'),
+    ciphertext: Buffer.from(encrypted).toString('base64'),
     credential_hash: credentialHash,
-    server_public_key: encodeBase64(serverKeypair.publicKey),
+    server_public_key: Buffer.from(serverKeypair.publicKey).toString('base64'),
   };
 }
 
@@ -58,10 +70,10 @@ export function decryptCredential(
   encryptedPackage: EncryptedPackage,
   userPrivateKeyBase64: string
 ): Record<string, unknown> {
-  const userPrivateKey = decodeBase64(userPrivateKeyBase64);
-  const serverPublicKey = decodeBase64(encryptedPackage.server_public_key);
-  const nonce = decodeBase64(encryptedPackage.nonce);
-  const ciphertext = decodeBase64(encryptedPackage.ciphertext);
+  const userPrivateKey = b64ToBytes(userPrivateKeyBase64);
+  const serverPublicKey = b64ToBytes(encryptedPackage.server_public_key);
+  const nonce = b64ToBytes(encryptedPackage.nonce);
+  const ciphertext = b64ToBytes(encryptedPackage.ciphertext);
 
   const decrypted = nacl.box.open(
     ciphertext,
@@ -74,7 +86,7 @@ export function decryptCredential(
     throw new Error('Decryption failed - invalid key or corrupted data');
   }
 
-  return JSON.parse(decodeUTF8(decrypted));
+  return JSON.parse(bytesToUtf8(decrypted));
 }
 
 /**
@@ -92,7 +104,7 @@ export function verifyCredentialHash(
  */
 export function generateApiKey(): string {
   const bytes = nacl.randomBytes(32);
-  return encodeBase64(bytes).replace(/[+/=]/g, '').substring(0, 32);
+  return Buffer.from(bytes).toString('base64').replace(/[+/=]/g, '').substring(0, 32);
 }
 
 /**
@@ -107,7 +119,7 @@ export function hashApiKey(apiKey: string): string {
  */
 export function generateConsentToken(): string {
   const bytes = nacl.randomBytes(16);
-  return encodeBase64(bytes).replace(/[+/=]/g, '').substring(0, 24);
+  return Buffer.from(bytes).toString('base64').replace(/[+/=]/g, '').substring(0, 24);
 }
 
 /**
@@ -118,12 +130,12 @@ export function signCredential(data: string): {
   publicKey: string;
 } {
   const keypair = nacl.sign.keyPair();
-  const messageBytes = encodeUTF8(data);
+  const messageBytes = utf8ToBytes(data);
   const signature = nacl.sign(messageBytes, keypair.secretKey);
 
   return {
-    signature: encodeBase64(signature),
-    publicKey: encodeBase64(keypair.publicKey),
+    signature: Buffer.from(signature).toString('base64'),
+    publicKey: Buffer.from(keypair.publicKey).toString('base64'),
   };
 }
 
@@ -146,12 +158,12 @@ export function verifySEP10Signature(
  */
 export function encryptField(value: string, secretKey: Uint8Array): string {
   const nonce = nacl.randomBytes(nacl.secretbox.nonceLength);
-  const messageBytes = encodeUTF8(value);
+  const messageBytes = utf8ToBytes(value);
   const encrypted = nacl.secretbox(messageBytes, nonce, secretKey);
 
   return JSON.stringify({
-    nonce: encodeBase64(nonce),
-    ciphertext: encodeBase64(encrypted),
+    nonce: Buffer.from(nonce).toString('base64'),
+    ciphertext: Buffer.from(encrypted).toString('base64'),
   });
 }
 
@@ -161,10 +173,10 @@ export function encryptField(value: string, secretKey: Uint8Array): string {
 export function decryptField(encryptedField: string, secretKey: Uint8Array): string {
   const { nonce, ciphertext } = JSON.parse(encryptedField);
   const decrypted = nacl.secretbox.open(
-    decodeBase64(ciphertext),
-    decodeBase64(nonce),
+    b64ToBytes(ciphertext),
+    b64ToBytes(nonce),
     secretKey
   );
   if (!decrypted) throw new Error('Field decryption failed');
-  return decodeUTF8(decrypted);
+  return bytesToUtf8(decrypted);
 }

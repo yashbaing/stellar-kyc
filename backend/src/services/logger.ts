@@ -42,10 +42,12 @@ export const logger = winston.createLogger({
   ],
 });
 
+import type { Request, Response, NextFunction } from 'express';
+
 export function createRequestLogger() {
-  return (req: { method: string; url: string; ip: string }, res: { statusCode: number }, next: () => void) => {
+  return (req: Request, res: Response, next: NextFunction) => {
     const start = Date.now();
-    res.on?.('finish', () => {
+    res.on('finish', () => {
       logger.info('HTTP Request', {
         method: req.method,
         url: req.url,

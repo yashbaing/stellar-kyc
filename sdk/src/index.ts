@@ -108,11 +108,18 @@ export class StellarKYC {
    * // Wait for user to approve, then call kyc.verify(consent.consentRequestId)
    */
   async requestConsent(request: ConsentRequest): Promise<ConsentResponse> {
-    const response = await this.post('/identity/consent/request', {
+    const response = (await this.post('/identity/consent/request', {
       stellar_account: request.account,
       fields_requested: request.fields,
       expires_in: request.expiresIn,
-    });
+    })) as {
+      consent_request_id: string;
+      anchor: string;
+      fields: KYCField[];
+      user_action_required: boolean;
+      expires_at: number;
+      credential_exists: boolean;
+    };
 
     return {
       consentRequestId: response.consent_request_id,
@@ -135,7 +142,19 @@ export class StellarKYC {
    * }
    */
   async verify(consentId: string): Promise<VerificationResult> {
-    const response = await this.get(`/identity/verify-proof?consent_id=${consentId}`);
+    const response = (await this.get(
+      `/identity/verify-proof?consent_id=${consentId}`
+    )) as {
+      is_valid: boolean;
+      verified: boolean;
+      account: string;
+      verified_by: string;
+      verification_timestamp: number;
+      risk_level: 'low' | 'medium' | 'high';
+      credential_age_days: number;
+      fields_verified: KYCField[];
+      expired: boolean;
+    };
 
     return {
       isValid: response.is_valid,
@@ -155,9 +174,18 @@ export class StellarKYC {
    * Use this to check if a user has existing verified credentials.
    */
   async getCustomerStatus(stellarAccount: string): Promise<CustomerStatus> {
-    const response = await this.get(
+    const response = (await this.get(
       `/identity/customer?stellar_account=${stellarAccount}`
-    );
+    )) as {
+      id: string;
+      status: CustomerStatus['status'];
+      risk_level?: 'low' | 'medium' | 'high';
+      verified_at?: number;
+      expires_at?: number;
+      fields_verified?: KYCField[];
+      credential_id?: string;
+      credential_hash?: string;
+    };
 
     return {
       id: response.id,
@@ -169,7 +197,7 @@ export class StellarKYC {
       expiresAt: response.expires_at
         ? new Date(response.expires_at * 1000)
         : undefined,
-      fieldsVerified: response.fields_verified || [],
+      fieldsVerified: response.fields_verified ?? [],
       credentialId: response.credential_id,
       credentialHash: response.credential_hash,
     };

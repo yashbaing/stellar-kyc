@@ -308,6 +308,6 @@ export async function getPendingConsentRequests(stellarAccount: string) {
 
   return result.rows.map(r => ({
     ...r,
-    fields_requested: JSON.parse(r.fields_requested),
+    fields_requested: JSON.parse(String(r.fields_requested ?? '[]')),
   }));
 }
