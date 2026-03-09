@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CheckCircle, Upload, User, MapPin, FileText, Shield } from 'lucide-react';
+import { CheckCircle, Upload, User, MapPin, FileText, Shield, AlertCircle } from 'lucide-react';
 import { useAppStore } from '../hooks/useStore';
 import { submitKYC } from '../services/api';
 import toast from 'react-hot-toast';
@@ -23,6 +23,9 @@ const STEPS = [
   { id: 4, label: 'Review', icon: Shield },
 ];
 
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PHONE_REGEX = /^[\d\s+()-]{10,20}$/;
+
 interface FormData {
   first_name: string; last_name: string; email: string;
   phone_number: string; date_of_birth: string;
@@ -31,11 +34,60 @@ interface FormData {
   id_number: string;
 }
 
+type FormErrors = Partial<Record<keyof FormData, string>>;
+
+function validateStep(step: number, form: FormData): FormErrors {
+  const errors: FormErrors = {};
+  if (step === 1) {
+    if (!form.first_name?.trim()) errors.first_name = 'Please enter your first name';
+    if (!form.last_name?.trim()) errors.last_name = 'Please enter your last name';
+    if (form.email?.trim() && !EMAIL_REGEX.test(form.email.trim())) {
+      errors.email = 'Please enter a valid email address';
+    }
+    if (form.phone_number?.trim() && !PHONE_REGEX.test(form.phone_number.trim())) {
+      errors.phone_number = 'Please enter a valid phone number';
+    }
+    if (form.date_of_birth) {
+      const dob = new Date(form.date_of_birth);
+      const now = new Date();
+      if (dob >= now) errors.date_of_birth = 'Date of birth must be in the past';
+      const age = (now.getTime() - dob.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+      if (age < 18) errors.date_of_birth = 'You must be at least 18 years old';
+    }
+  }
+  if (step === 2) {
+    if (!form.address?.trim()) errors.address = 'Please enter your street address';
+    if (!form.city?.trim()) errors.city = 'Please enter your city';
+  }
+  if (step === 3) {
+    if (!form.id_number?.trim()) errors.id_number = 'Please enter your document number';
+  }
+  return errors;
+}
+
+function isStepValid(step: number, form: FormData): boolean {
+  return Object.keys(validateStep(step, form)).length === 0;
+}
+
+function isFormValidForSubmit(form: FormData): boolean {
+  return (
+    !!form.first_name?.trim() &&
+    !!form.last_name?.trim() &&
+    !!form.address?.trim() &&
+    !!form.city?.trim() &&
+    !!form.id_number?.trim() &&
+    (!form.email?.trim() || EMAIL_REGEX.test(form.email.trim())) &&
+    (!form.phone_number?.trim() || PHONE_REGEX.test(form.phone_number.trim()))
+  );
+}
+
 export default function KYCSubmit() {
   const navigate = useNavigate();
   const { wallet, setKYCStatus } = useAppStore();
   const [step, setStep] = useState(1);
   const [submitting, setSubmitting] = useState(false);
+  const [errors, setErrors] = useState<FormErrors>({});
+  const [touched, setTouched] = useState<Partial<Record<keyof FormData, boolean>>>({});
   const [form, setForm] = useState<FormData>({
     first_name: '', last_name: '', email: '', phone_number: '',
     date_of_birth: '', address: '', city: '', country: 'IN',
@@ -43,17 +95,51 @@ export default function KYCSubmit() {
   });
 
   const selectedCountry = COUNTRIES.find(c => c.code === form.country) || COUNTRIES[0];
+  const stepValid = isStepValid(step, form);
+  const canSubmit = step === 4 && isFormValidForSubmit(form);
 
-  const update = (field: keyof FormData, value: string) =>
+  const update = useCallback((field: keyof FormData, value: string) => {
     setForm(prev => ({ ...prev, [field]: value }));
+    setErrors(prev => ({ ...prev, [field]: undefined }));
+  }, []);
+
+  const goNext = useCallback(() => {
+    const stepErrors = validateStep(step, form);
+    if (Object.keys(stepErrors).length > 0) {
+      setErrors(stepErrors);
+      const keys = Object.keys(stepErrors) as (keyof FormData)[];
+      setTouched(prev => ({ ...prev, ...Object.fromEntries(keys.map(k => [k, true] as const)) }));
+      toast.error('Please fix the errors before continuing');
+      return;
+    }
+    setErrors({});
+    setStep(s => Math.min(4, s + 1));
+  }, [step, form]);
+
+  const goBack = useCallback(() => {
+    setErrors({});
+    setStep(s => Math.max(1, s - 1));
+  }, []);
 
   const handleSubmit = async () => {
     if (!wallet.stellarAccount || !wallet.publicKey) {
       toast.error('Please connect your wallet first');
       return;
     }
+    const allErrors: FormErrors = { ...validateStep(1, form), ...validateStep(2, form), ...validateStep(3, form) };
+    if (Object.keys(allErrors).length > 0) {
+      setErrors(allErrors);
+      setTouched(prev => ({ ...prev, ...Object.fromEntries((Object.keys(allErrors) as (keyof FormData)[]).map(k => [k, true] as const)) }));
+      toast.error('Please complete all required fields before submitting');
+      return;
+    }
+    if (!isFormValidForSubmit(form)) {
+      toast.error('Please complete all required fields');
+      return;
+    }
 
     setSubmitting(true);
+    setErrors({});
     try {
       const result = await submitKYC(wallet.stellarAccount, {
         ...form,
@@ -68,33 +154,34 @@ export default function KYCSubmit() {
       toast.success('KYC submitted successfully!');
       navigate('/dashboard');
     } catch (err: unknown) {
-      // Simulate success for demo
-      setKYCStatus({
-        status: 'verified',
-        riskLevel: 'low',
-        credentialId: `cred_${Date.now()}`,
-        credentialHash: Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join(''),
-        verifiedAt: Math.floor(Date.now() / 1000),
-        expiresAt: Math.floor(Date.now() / 1000) + 365 * 86400,
-      });
-      toast.success('KYC verified! (Demo mode)');
-      navigate('/dashboard');
+      const message = err instanceof Error ? err.message : 'Submission failed. Please try again.';
+      toast.error(message);
     } finally {
       setSubmitting(false);
     }
   };
 
-  const inputStyle = {
-    width: '100%', padding: '12px 14px', borderRadius: '10px',
-    background: '#060b14', border: '1px solid #1e3a5f',
-    color: '#e2e8f0', fontSize: '14px', outline: 'none',
+  const inputStyle = (field: keyof FormData) => ({
+    width: '100%' as const,
+    padding: '12px 14px',
+    borderRadius: '10px',
+    background: '#060b14',
+    border: `1px solid ${errors[field] ? '#ef4444' : '#1e3a5f'}`,
+    color: '#e2e8f0',
+    fontSize: '14px',
+    outline: 'none',
     boxSizing: 'border-box' as const,
-  };
+  });
 
   const labelStyle = {
-    display: 'block', fontSize: '13px', color: '#94a3b8',
-    marginBottom: '6px', fontWeight: 500,
+    display: 'block' as const,
+    fontSize: '13px',
+    color: '#94a3b8',
+    marginBottom: '6px',
+    fontWeight: 500,
   };
+
+  const errorStyle = { fontSize: '12px', color: '#ef4444', marginTop: '4px' };
 
   return (
     <div style={{ padding: '40px 48px', maxWidth: '800px' }}>
@@ -139,6 +226,19 @@ export default function KYCSubmit() {
         borderRadius: '20px', padding: '36px',
       }}>
 
+        {Object.keys(errors).length > 0 && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 16px',
+            marginBottom: '20px', borderRadius: '10px',
+            background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)',
+          }}>
+            <AlertCircle size={20} color="#ef4444" />
+            <span style={{ color: '#fca5a5', fontSize: '14px' }}>
+              Please fix the errors below before continuing.
+            </span>
+          </div>
+        )}
+
         {/* Step 1: Personal Info */}
         {step === 1 && (
           <div>
@@ -146,32 +246,43 @@ export default function KYCSubmit() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
               <div>
                 <label style={labelStyle}>First Name *</label>
-                <input style={inputStyle} value={form.first_name}
+                <input style={inputStyle('first_name')} value={form.first_name}
                   onChange={e => update('first_name', e.target.value)}
-                  placeholder="Maria" />
+                  onBlur={() => setTouched(prev => ({ ...prev, first_name: true }))}
+                  placeholder="Maria" aria-invalid={!!errors.first_name} />
+                {errors.first_name && <div style={errorStyle}>{errors.first_name}</div>}
               </div>
               <div>
                 <label style={labelStyle}>Last Name *</label>
-                <input style={inputStyle} value={form.last_name}
+                <input style={inputStyle('last_name')} value={form.last_name}
                   onChange={e => update('last_name', e.target.value)}
-                  placeholder="Doe" />
+                  onBlur={() => setTouched(prev => ({ ...prev, last_name: true }))}
+                  placeholder="Doe" aria-invalid={!!errors.last_name} />
+                {errors.last_name && <div style={errorStyle}>{errors.last_name}</div>}
               </div>
               <div>
                 <label style={labelStyle}>Email Address</label>
-                <input style={inputStyle} type="email" value={form.email}
+                <input style={inputStyle('email')} type="email" value={form.email}
                   onChange={e => update('email', e.target.value)}
-                  placeholder="maria@example.com" />
+                  onBlur={() => setTouched(prev => ({ ...prev, email: true }))}
+                  placeholder="maria@example.com" aria-invalid={!!errors.email} />
+                {errors.email && <div style={errorStyle}>{errors.email}</div>}
               </div>
               <div>
                 <label style={labelStyle}>Phone Number</label>
-                <input style={inputStyle} value={form.phone_number}
+                <input style={inputStyle('phone_number')} value={form.phone_number}
                   onChange={e => update('phone_number', e.target.value)}
-                  placeholder="+91 98765 43210" />
+                  onBlur={() => setTouched(prev => ({ ...prev, phone_number: true }))}
+                  placeholder="+91 98765 43210" aria-invalid={!!errors.phone_number} />
+                {errors.phone_number && <div style={errorStyle}>{errors.phone_number}</div>}
               </div>
-              <div>
+              <div style={{ gridColumn: '1 / -1' }}>
                 <label style={labelStyle}>Date of Birth</label>
-                <input style={inputStyle} type="date" value={form.date_of_birth}
-                  onChange={e => update('date_of_birth', e.target.value)} />
+                <input style={inputStyle('date_of_birth')} type="date" value={form.date_of_birth}
+                  onChange={e => update('date_of_birth', e.target.value)}
+                  onBlur={() => setTouched(prev => ({ ...prev, date_of_birth: true }))}
+                  aria-invalid={!!errors.date_of_birth} />
+                {errors.date_of_birth && <div style={errorStyle}>{errors.date_of_birth}</div>}
               </div>
             </div>
           </div>
@@ -183,21 +294,25 @@ export default function KYCSubmit() {
             <h2 style={{ fontSize: '20px', fontWeight: 700, marginBottom: '24px' }}>Address & Country</h2>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div>
-                <label style={labelStyle}>Street Address</label>
-                <input style={inputStyle} value={form.address}
+                <label style={labelStyle}>Street Address *</label>
+                <input style={inputStyle('address')} value={form.address}
                   onChange={e => update('address', e.target.value)}
-                  placeholder="123 Main Street" />
+                  onBlur={() => setTouched(prev => ({ ...prev, address: true }))}
+                  placeholder="123 Main Street" aria-invalid={!!errors.address} />
+                {errors.address && <div style={errorStyle}>{errors.address}</div>}
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                 <div>
-                  <label style={labelStyle}>City</label>
-                  <input style={inputStyle} value={form.city}
+                  <label style={labelStyle}>City *</label>
+                  <input style={inputStyle('city')} value={form.city}
                     onChange={e => update('city', e.target.value)}
-                    placeholder="Mumbai" />
+                    onBlur={() => setTouched(prev => ({ ...prev, city: true }))}
+                    placeholder="Mumbai" aria-invalid={!!errors.city} />
+                  {errors.city && <div style={errorStyle}>{errors.city}</div>}
                 </div>
                 <div>
                   <label style={labelStyle}>Country</label>
-                  <select style={inputStyle} value={form.country}
+                  <select style={inputStyle('country')} value={form.country}
                     onChange={e => update('country', e.target.value)}>
                     {COUNTRIES.map(c => (
                       <option key={c.code} value={c.code}>{c.name}</option>
@@ -233,7 +348,7 @@ export default function KYCSubmit() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div>
                 <label style={labelStyle}>Document Type</label>
-                <select style={inputStyle} value={form.id_type}
+                <select style={inputStyle('id_type')} value={form.id_type}
                   onChange={e => update('id_type', e.target.value as 'passport' | 'national_id' | 'drivers_license')}>
                   <option value="passport">Passport</option>
                   <option value="national_id">National ID</option>
@@ -241,10 +356,12 @@ export default function KYCSubmit() {
                 </select>
               </div>
               <div>
-                <label style={labelStyle}>Document Number</label>
-                <input style={inputStyle} value={form.id_number}
+                <label style={labelStyle}>Document Number *</label>
+                <input style={inputStyle('id_number')} value={form.id_number}
                   onChange={e => update('id_number', e.target.value)}
-                  placeholder="e.g. A1234567" />
+                  onBlur={() => setTouched(prev => ({ ...prev, id_number: true }))}
+                  placeholder="e.g. A1234567" aria-invalid={!!errors.id_number} />
+                {errors.id_number && <div style={errorStyle}>{errors.id_number}</div>}
               </div>
               {/* Upload areas */}
               {['Upload ID Document', 'Upload Selfie'].map(label => (
@@ -271,9 +388,14 @@ export default function KYCSubmit() {
         {step === 4 && (
           <div>
             <h2 style={{ fontSize: '20px', fontWeight: 700, marginBottom: '24px' }}>Review & Submit</h2>
+            {!canSubmit && (
+              <p style={{ color: '#fca5a5', fontSize: '14px', marginBottom: '16px' }}>
+                Complete all required steps (name, address, city, document number) to submit.
+              </p>
+            )}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               {[
-                { label: 'Name', value: `${form.first_name} ${form.last_name}` },
+                { label: 'Name', value: `${form.first_name || '—'} ${form.last_name || '—'}`.trim() || '—' },
                 { label: 'Email', value: form.email || '—' },
                 { label: 'Phone', value: form.phone_number || '—' },
                 { label: 'Country', value: selectedCountry.name },
@@ -308,8 +430,9 @@ export default function KYCSubmit() {
         {/* Actions */}
         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '32px' }}>
           <button
-            onClick={() => setStep(s => s - 1)}
+            onClick={goBack}
             disabled={step === 1}
+            type="button"
             style={{
               padding: '12px 24px', borderRadius: '10px',
               border: '1px solid #1e3a5f', background: 'none',
@@ -322,11 +445,14 @@ export default function KYCSubmit() {
 
           {step < 4 ? (
             <button
-              onClick={() => setStep(s => s + 1)}
+              onClick={goNext}
+              type="button"
               style={{
                 padding: '12px 28px', borderRadius: '10px',
-                background: 'linear-gradient(135deg, #0369a1, #0ea5e9)',
-                color: 'white', border: 'none', cursor: 'pointer',
+                background: stepValid ? 'linear-gradient(135deg, #0369a1, #0ea5e9)' : '#1e3a5f',
+                color: stepValid ? 'white' : '#64748b',
+                border: '1px solid #1e3a5f',
+                cursor: stepValid ? 'pointer' : 'not-allowed',
                 fontSize: '14px', fontWeight: 600,
               }}
             >
@@ -335,16 +461,18 @@ export default function KYCSubmit() {
           ) : (
             <button
               onClick={handleSubmit}
-              disabled={submitting}
+              disabled={submitting || !canSubmit}
+              type="button"
               style={{
                 padding: '12px 28px', borderRadius: '10px',
-                background: submitting ? '#0369a1' : 'linear-gradient(135deg, #065f46, #22c55e)',
-                color: 'white', border: 'none', cursor: submitting ? 'default' : 'pointer',
+                background: submitting ? '#0369a1' : canSubmit ? 'linear-gradient(135deg, #065f46, #22c55e)' : '#1e3a5f',
+                color: 'white', border: 'none',
+                cursor: submitting || !canSubmit ? 'not-allowed' : 'pointer',
                 fontSize: '14px', fontWeight: 600,
                 display: 'flex', alignItems: 'center', gap: '8px',
               }}
             >
-              {submitting ? '⏳ Verifying...' : '✓ Submit KYC'}
+              {submitting ? '⏳ Verifying...' : canSubmit ? '✓ Submit KYC' : 'Complete required fields to submit'}
             </button>
           )}
         </div>
